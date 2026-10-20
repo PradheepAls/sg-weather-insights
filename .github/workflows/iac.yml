@@ -26,6 +26,7 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
       - name: terraform fmt
         run: terraform fmt -check -recursive infra/terraform
       - name: validate + test modules
@@ -35,7 +36,10 @@ jobs:
           # checks API / PR UI without opening the raw log.
           fail() {
             msg=$(tail -n 80 "$2" | sed -e 's/\x1b\[[0-9;]*m//g' -e 's/%/%25/g' -e 's/\r//g' | sed ':a;N;$!ba;s/\n/%0A/g')
-            echo "::error title=$1::$msg"; status=1
+            grep -E '^(Error|│ Error|╷|│ +on |│ +[A-Za-z])' "$2" | grep -E 'Error' | head -n 9 | while IFS= read -r line; do
+              echo "::error title=$1::$(echo "$line" | sed 's/%/%25/g')"
+            done
+            echo "::error title=$1 (tail)::$msg"; status=1
           }
           status=0
           for dir in infra/terraform/modules/*/ infra/terraform/bootstrap/ infra/terraform/stacks/*/; do
