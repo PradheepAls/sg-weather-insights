@@ -1,0 +1,4 @@
+bucket       = "sgw-tfstate-111122223333"
+region       = "ap-southeast-1"
+use_lockfile = true   # native S3 locking (Terraform >= 1.10), no DynamoDB table
+encrypt      = true

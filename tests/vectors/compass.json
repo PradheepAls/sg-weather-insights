@@ -1,0 +1,17 @@
+{
+  "description": "Wind direction degrees to 16-point compass. Sector width 22.5°, N centred on 0°.",
+  "cases": [
+    {"degrees": 0,      "point": "N"},
+    {"degrees": 11.24,  "point": "N"},
+    {"degrees": 11.25,  "point": "NNE"},
+    {"degrees": 45,     "point": "NE"},
+    {"degrees": 90,     "point": "E"},
+    {"degrees": 180,    "point": "S"},
+    {"degrees": 225,    "point": "SW"},
+    {"degrees": 270,    "point": "W"},
+    {"degrees": 348.74, "point": "NNW"},
+    {"degrees": 348.75, "point": "N"},
+    {"degrees": 360,    "point": "N"},
+    {"degrees": 720,    "point": "N"}
+  ]
+}

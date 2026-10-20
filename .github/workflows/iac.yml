@@ -1,0 +1,97 @@
+name: iac
+
+on:
+  pull_request:
+    paths: ["infra/**", ".github/workflows/iac.yml", ".checkov.yaml"]
+  push:
+    branches: [main]
+    paths: ["infra/**", ".github/workflows/iac.yml", ".checkov.yaml"]
+
+permissions:
+  contents: read
+  id-token: write        # OIDC for the optional plan job
+  pull-requests: write   # plan summary comment
+  security-events: write # Checkov SARIF
+
+env:
+  TF_VERSION: "1.11.4"
+  TF_IN_AUTOMATION: "1"
+
+jobs:
+  static:
+    name: fmt, validate, terraform test, tflint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      - name: terraform fmt
+        run: terraform fmt -check -recursive infra/terraform
+      - name: validate + test modules
+        run: |
+          set -euo pipefail
+          for dir in infra/terraform/modules/*/; do
+            echo "::group::$dir"
+            terraform -chdir="$dir" init -backend=false -input=false
+            terraform -chdir="$dir" validate
+            terraform -chdir="$dir" test
+            echo "::endgroup::"
+          done
+      - name: validate stacks
+        run: |
+          set -euo pipefail
+          for dir in infra/terraform/bootstrap infra/terraform/stacks/*/; do
+            terraform -chdir="$dir" init -backend=false -input=false
+            terraform -chdir="$dir" validate
+          done
+      - uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: v0.54.0
+      - name: tflint
+        working-directory: infra/terraform
+        run: |
+          tflint --init --config "$PWD/.tflint.hcl"
+          tflint --recursive --config "$PWD/.tflint.hcl" --format compact
+
+  checkov:
+    name: Checkov security scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: infra/terraform
+          config_file: .checkov.yaml
+          output_format: cli,sarif
+          output_file_path: console,results.sarif
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: results.sarif
+
+  plan-dev:
+    name: Plan (dev)
+    needs: [static]
+    if: github.event_name == 'pull_request' && vars.AWS_PLAN_ROLE_ARN != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_PLAN_ROLE_ARN }}
+          aws-region: ap-southeast-1
+      - name: plan
+        working-directory: infra/terraform/stacks/environment
+        run: |
+          terraform init -input=false \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" -backend-config="region=ap-southeast-1" \
+            -backend-config="use_lockfile=true" -backend-config="key=env/dev.tfstate"
+          terraform plan -input=false -lock=false -no-color \
+            -var-file=envs/dev.tfvars -var="state_bucket=${{ vars.TF_STATE_BUCKET }}" | tee plan.txt
+      - name: summary
+        run: |
+          { echo '### Terraform plan (dev)'; echo '```'; tail -n 60 infra/terraform/stacks/environment/plan.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

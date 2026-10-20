@@ -1,0 +1,7 @@
+services:
+  dgs-stub:
+    image: wiremock/wiremock:3.10.0
+    ports: ["8089:8080"]
+    volumes:
+      - ./wiremock:/home/wiremock
+    command: ["--global-response-templating", "--verbose"]

@@ -1,0 +1,16 @@
+{
+  "description": "NEA 24-hour PSI bands. Boundaries are inclusive upper bounds. Used by WeatherRules_Lib.PsiBand and its BDD tests.",
+  "cases": [
+    {"psi": 0,   "band": "Good",           "level": 1},
+    {"psi": 50,  "band": "Good",           "level": 1},
+    {"psi": 51,  "band": "Moderate",       "level": 2},
+    {"psi": 100, "band": "Moderate",       "level": 2},
+    {"psi": 101, "band": "Unhealthy",      "level": 3},
+    {"psi": 200, "band": "Unhealthy",      "level": 3},
+    {"psi": 201, "band": "Very unhealthy", "level": 4},
+    {"psi": 300, "band": "Very unhealthy", "level": 4},
+    {"psi": 301, "band": "Hazardous",      "level": 5},
+    {"psi": 999, "band": "Hazardous",      "level": 5},
+    {"psi": -1,  "band": "Invalid",        "level": 0}
+  ]
+}

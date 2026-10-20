@@ -1,0 +1,18 @@
+[project]
+name = "sg-weather-insights-tests"
+version = "1.0.0"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["tests"]
+markers = [
+  "live: calls the real data.gov.sg API (nightly)",
+  "integration: calls the deployed Weather_API (needs WEATHER_API_BASE_URL)",
+]
+addopts = "-ra --strict-markers"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"

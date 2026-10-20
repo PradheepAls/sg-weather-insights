@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "dgs/region_readings",
+  "title": "data.gov.sg v2 real-time regional readings (psi, pm25)",
+  "type": "object",
+  "required": ["code", "data", "errorMsg"],
+  "properties": {
+    "code": {"const": 0},
+    "data": {
+      "type": "object",
+      "required": ["regionMetadata", "items"],
+      "properties": {
+        "regionMetadata": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "labelLocation"],
+            "properties": {
+              "name": {"enum": ["north", "south", "east", "west", "central"]},
+              "labelLocation": {"type": "object", "required": ["latitude", "longitude"]}
+            }
+          }
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["timestamp", "readings"],
+            "properties": {
+              "timestamp": {"type": "string"},
+              "updatedTimestamp": {"type": "string"},
+              "readings": {
+                "type": "object",
+                "minProperties": 1,
+                "additionalProperties": {
+                  "type": "object",
+                  "additionalProperties": {"type": "number"}
+                }
+              }
+            }
+          }
+        },
+        "paginationToken": {"type": "string"}
+      }
+    }
+  }
+}

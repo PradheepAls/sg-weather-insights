@@ -1,0 +1,10 @@
+environment             = "lifetime"
+network                 = "nonprod"
+public_hostname         = "lifetime.weather.example.gov.sg"
+certificate_arn         = "arn:aws:acm:ap-southeast-1:111122223333:certificate/replace-me"
+alb_internal            = true
+alb_ingress_cidrs       = ["10.20.0.0/16", "10.99.0.0/16"] # VPC + corporate VPN
+admin_cidrs             = ["10.20.0.0/16", "10.99.0.0/16"]
+platform_server_version = "11.31.0" # pin to the version your LifeTime supports
+license_s3_key          = "licenses/lifetime.lic"
+db_instance_class       = "db.m6i.large"

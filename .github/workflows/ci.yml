@@ -1,0 +1,54 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python-tests:
+    name: Contract, rules and API-spec tests (offline)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements-test.txt
+      - run: ruff check tests
+      - run: pytest -m "not live and not integration" --junitxml=results/pytest.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pytest-results
+          path: results/
+
+  e2e-typecheck:
+    name: Playwright suite compiles
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tests/e2e
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npx playwright test --list
+
+  stub-fixtures-in-sync:
+    name: WireMock files mirror contract fixtures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: diff -r tests/contract/fixtures tests/mocks/wiremock/__files -x README.md

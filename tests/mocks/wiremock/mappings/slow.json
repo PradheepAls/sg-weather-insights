@@ -1,0 +1,4 @@
+{
+  "request": { "method": "GET", "urlPathPattern": "/v2/real-time/api/.*", "headers": { "X-Test-Scenario": { "equalTo": "slow" } } },
+  "response": { "status": 200, "fixedDelayMilliseconds": 20000, "headers": { "Content-Type": "application/json" }, "bodyFileName": "air_temperature_latest.json" }
+}

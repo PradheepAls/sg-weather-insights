@@ -1,0 +1,19 @@
+{
+  "mappings": [
+    {
+      "request": { "method": "GET", "urlPath": "/v2/real-time/api/rainfall",
+                   "queryParameters": { "date": { "equalTo": "2026-10-14" }, "paginationToken": { "absent": true } } },
+      "response": { "status": 200, "headers": { "Content-Type": "application/json" }, "bodyFileName": "rainfall_by_date_page1.json" }
+    },
+    {
+      "request": { "method": "GET", "urlPath": "/v2/real-time/api/rainfall",
+                   "queryParameters": { "paginationToken": { "equalTo": "b2Zmc2V0PTI1" } } },
+      "response": { "status": 200, "headers": { "Content-Type": "application/json" },
+                    "jsonBody": { "code": 0, "errorMsg": "", "data": { "stations": [], "readings": [], "readingType": "TB1 Rainfall 5 Minute Total F", "readingUnit": "mm" } } }
+    },
+    {
+      "request": { "method": "GET", "urlPath": "/v2/real-time/api/rainfall", "headers": { "X-Test-Scenario": { "equalTo": "error-envelope" } } },
+      "response": { "status": 200, "headers": { "Content-Type": "application/json" }, "bodyFileName": "error_envelope.json" }
+    }
+  ]
+}

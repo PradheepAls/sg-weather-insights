@@ -1,0 +1,15 @@
+{
+  "description": "Freshness of the newest reading for an endpoint. Fresh if age <= threshold, Stale if older, NoData if never received. Thresholds in minutes.",
+  "thresholds": {"air-temperature": 15, "relative-humidity": 15, "wind-speed": 15, "wind-direction": 15, "rainfall": 20, "psi": 120, "pm25": 120},
+  "now": "2026-10-20T16:30:00+08:00",
+  "cases": [
+    {"endpoint": "air-temperature", "latest": "2026-10-20T16:15:00+08:00", "status": "Fresh"},
+    {"endpoint": "air-temperature", "latest": "2026-10-20T16:14:59+08:00", "status": "Stale"},
+    {"endpoint": "rainfall",        "latest": "2026-10-20T16:10:00+08:00", "status": "Fresh"},
+    {"endpoint": "rainfall",        "latest": "2026-10-20T16:09:00+08:00", "status": "Stale"},
+    {"endpoint": "psi",             "latest": "2026-10-20T14:30:00+08:00", "status": "Fresh"},
+    {"endpoint": "psi",             "latest": "2026-10-20T14:00:00+08:00", "status": "Stale"},
+    {"endpoint": "pm25",            "latest": null,                        "status": "NoData"},
+    {"endpoint": "air-temperature", "latest": "2026-10-20T16:31:00+08:00", "status": "Fresh", "note": "clock skew: future timestamps are treated as fresh, not rejected"}
+  ]
+}

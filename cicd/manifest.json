@@ -1,0 +1,11 @@
+{
+  "ApplicationVersions": [
+    { "ApplicationName": "SG Weather Insights", "IsTestApplication": false },
+    { "ApplicationName": "SG Weather Insights Tests", "IsTestApplication": true }
+  ],
+  "Environments": [
+    { "EnvironmentLabel": "Development", "EnvironmentName": "Development" },
+    { "EnvironmentLabel": "Test", "EnvironmentName": "Test" },
+    { "EnvironmentLabel": "Production", "EnvironmentName": "Production" }
+  ]
+}

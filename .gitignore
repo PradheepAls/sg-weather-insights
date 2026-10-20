@@ -1,0 +1,23 @@
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+crash.log
+*.tfplan
+infra/terraform/backend.hcl
+infra/terraform/stacks/foundation/terraform.tfvars
+.terraform.lock.hcl
+
+# Python
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.venv/
+results/
+
+# Node
+node_modules/
+
+# Secrets never belong here
+*.lic
+.env

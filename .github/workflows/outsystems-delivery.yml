@@ -1,0 +1,154 @@
+# Promotes the latest tagged SG Weather Insights version Dev -> Test -> Prod through LifeTime,
+# with automated gates at each step. Triggered manually, or by LifeTime's "Trigger Pipeline"
+# plugin calling the repository_dispatch event after a release tag.
+name: outsystems-delivery
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy_to_prod:
+        description: "Continue to Production after Test gates pass (still needs approval)"
+        type: boolean
+        default: false
+  repository_dispatch:
+    types: [outsystems-tag-created]
+
+permissions:
+  contents: read
+  checks: write
+
+concurrency:
+  group: outsystems-delivery
+  cancel-in-progress: false
+
+env:
+  APP_LIST: "SG Weather Insights"
+  TEST_APP_LIST: "SG Weather Insights Tests"
+  ARTIFACTS: Artifacts
+
+jobs:
+  unit-and-integration:
+    name: BDD tests on Development
+    runs-on: ubuntu-latest
+    environment: development
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install outsystems-pipeline==0.7.2
+      - name: Fetch LifeTime data
+        run: python -m outsystems.pipeline.fetch_lifetime_data -a "$ARTIFACTS" -u "${{ secrets.LIFETIME_URL }}" -t "${{ secrets.LIFETIME_TOKEN }}"
+      - name: Discover BDD tests via CI/CD Probe
+        run: |
+          python -m outsystems.pipeline.generate_unit_testing_assembly -a "$ARTIFACTS" \
+            -l "$APP_LIST,$TEST_APP_LIST" \
+            --cicd_probe_env "${{ secrets.DEV_URL }}" \
+            --bdd_framework_env "${{ secrets.DEV_URL }}"
+      - name: Run BDD tests
+        run: python -m outsystems.pipeline.evaluate_test_results -a "$ARTIFACTS"
+      - uses: mikepenz/action-junit-report@v4
+        if: always()
+        with:
+          report_paths: "${{ env.ARTIFACTS }}/**/*.xml"
+          check_name: BDD (Development)
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lifetime-artifacts
+          path: ${{ env.ARTIFACTS }}
+
+  deploy-test:
+    name: Deploy to Test
+    needs: unit-and-integration
+    runs-on: ubuntu-latest
+    environment: test
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install outsystems-pipeline==0.7.2
+      - uses: actions/download-artifact@v4
+        with:
+          name: lifetime-artifacts
+          path: ${{ env.ARTIFACTS }}
+      - name: Deploy latest tags Development -> Test
+        run: |
+          python -m outsystems.pipeline.deploy_latest_tags_to_target_env -a "$ARTIFACTS" \
+            -u "${{ secrets.LIFETIME_URL }}" -t "${{ secrets.LIFETIME_TOKEN }}" \
+            -s "Development" -d "Test" -l "$APP_LIST,$TEST_APP_LIST" \
+            -m "GitHub Actions run ${{ github.run_id }}"
+
+  acceptance:
+    name: API + E2E + accessibility on Test
+    needs: deploy-test
+    runs-on: ubuntu-latest
+    environment: test
+    env:
+      WEATHER_API_BASE_URL: ${{ secrets.TEST_API_URL }}
+      WEATHER_APP_URL: ${{ secrets.TEST_APP_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements-test.txt
+      - name: Wait for first sync after deploy
+        run: |
+          for i in $(seq 1 20); do
+            status=$(curl -fsS "$WEATHER_API_BASE_URL/health" | jq -r .status || true)
+            [ "$status" = "Healthy" ] && exit 0
+            echo "health=$status, retrying"; sleep 30
+          done
+          echo "::warning::Test environment still Degraded; running tests anyway"
+      - run: pytest -m integration --junitxml=results/api.xml
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - working-directory: tests/e2e
+        run: |
+          npm install --no-audit --no-fund
+          npx playwright install --with-deps chromium webkit
+          npx playwright test
+      - uses: mikepenz/action-junit-report@v4
+        if: always()
+        with:
+          report_paths: "results/*.xml,tests/e2e/results/junit.xml"
+          check_name: Acceptance (Test)
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: acceptance-results
+          path: |
+            results/
+            tests/e2e/results/
+
+  deploy-prod:
+    name: Deploy to Production
+    needs: acceptance
+    if: github.event_name == 'repository_dispatch' || inputs.deploy_to_prod
+    runs-on: ubuntu-latest
+    environment: production   # required reviewers configured on the GitHub Environment
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install outsystems-pipeline==0.7.2
+      - uses: actions/download-artifact@v4
+        with:
+          name: lifetime-artifacts
+          path: ${{ env.ARTIFACTS }}
+      - name: Deploy latest tags Test -> Production (runtime app only, never the test app)
+        run: |
+          python -m outsystems.pipeline.deploy_latest_tags_to_target_env -a "$ARTIFACTS" \
+            -u "${{ secrets.LIFETIME_URL }}" -t "${{ secrets.LIFETIME_TOKEN }}" \
+            -s "Test" -d "Production" -l "$APP_LIST" \
+            -m "GitHub Actions run ${{ github.run_id }} (approved)"
+      - name: Smoke test
+        run: |
+          for i in $(seq 1 20); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "${{ secrets.PROD_API_URL }}/health")
+            [ "$code" = "200" ] && exit 0
+            sleep 30
+          done
+          echo "Production health check failed"; exit 1

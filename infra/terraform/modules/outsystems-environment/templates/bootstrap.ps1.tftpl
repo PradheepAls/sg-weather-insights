@@ -1,0 +1,216 @@
+# OutSystems 11 server bootstrap for ${environment}. Rendered by Terraform, stored in S3,
+# executed once at first boot by the user-data stub. Contains no secrets: everything sensitive
+# is read from Secrets Manager with the instance role at run time.
+#
+# Uses the Outsystems.SetupTools PowerShell module (PowerShell Gallery). Verify cmdlet
+# parameters against the pinned module version when upgrading it.
+param(
+    [Parameter(Mandatory)] [ValidateSet('controller', 'frontend')] [string] $Role
+)
+
+$ErrorActionPreference = 'Stop'
+$ProgressPreference    = 'SilentlyContinue'
+$State                 = 'C:\ProgramData\sgw'
+$Done                  = Join-Path $State 'bootstrap.done'
+Start-Transcript -Path (Join-Path $State 'bootstrap.log') -Append
+
+if (Test-Path $Done) { Write-Output 'Bootstrap already completed; nothing to do.'; Stop-Transcript; exit 0 }
+
+$Region          = '${region}'
+$Environment     = '${environment}'
+$IsLifetime      = [bool]::Parse('${is_lifetime}')
+$PlatformVersion = '${platform_server_version}'
+$DbHost          = '${db_host}'
+$ControllerFqdn  = '${controller_fqdn}'
+$SetupToolsVer   = '3.16.1.0'
+
+function Get-SecretJson([string] $Arn) {
+    (Get-SECSecretValue -SecretId $Arn -Region $Region).SecretString | ConvertFrom-Json
+}
+
+function New-Cred([string] $User, [string] $Password) {
+    New-Object System.Management.Automation.PSCredential($User, (ConvertTo-SecureString $Password -AsPlainText -Force))
+}
+
+function Wait-Port([string] $HostName, [int] $Port, [int] $TimeoutMinutes = 90) {
+    $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
+    while ((Get-Date) -lt $deadline) {
+        if ((Test-NetConnection -ComputerName $HostName -Port $Port -WarningAction SilentlyContinue).TcpTestSucceeded) { return }
+        Start-Sleep -Seconds 30
+    }
+    throw "Timed out waiting for $($HostName):$($Port)"
+}
+
+try {
+    # ------------------------------------------------------------ OS baseline
+    Set-TimeZone -Id 'Singapore Standard Time'   # matches RDS; OutSystems uses server-local time
+
+    # Trust the RDS CA so the platform can connect with Encrypt=True (rds.force_ssl).
+    $bundle = Join-Path $State 'rds-global-bundle.pem'
+    Invoke-WebRequest -UseBasicParsing -Uri 'https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem' -OutFile $bundle
+    $pem = Get-Content $bundle -Raw
+    [regex]::Matches($pem, '-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----') | ForEach-Object {
+        $tmp = New-TemporaryFile
+        Set-Content -Path $tmp -Value $_.Value
+        Import-Certificate -FilePath $tmp -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+        Remove-Item $tmp
+    }
+
+    Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force | Out-Null
+    Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+    Install-Module Outsystems.SetupTools -RequiredVersion $SetupToolsVer -Force
+    Install-Module SqlServer -Force -AllowClobber
+    Import-Module Outsystems.SetupTools, SqlServer
+
+    $secret = Get-SecretJson '${platform_secret_arn}'
+
+    # ------------------------------------------------------------ database (controller only)
+    if ($Role -eq 'controller') {
+        $master = Get-SecretJson '${master_secret_arn}'
+        $sql = @"
+DECLARE @dbs TABLE (name sysname);
+INSERT @dbs VALUES ('${catalog_platform}'), ('${catalog_log}'), ('${catalog_session}');
+DECLARE @n sysname;
+DECLARE c CURSOR FOR SELECT name FROM @dbs;
+OPEN c; FETCH NEXT FROM c INTO @n;
+WHILE @@FETCH_STATUS = 0 BEGIN
+  IF DB_ID(@n) IS NULL EXEC('CREATE DATABASE [' + @n + '] COLLATE SQL_Latin1_General_CP1_CI_AS');
+  FETCH NEXT FROM c INTO @n;
+END
+CLOSE c; DEALLOCATE c;
+"@
+        $conn = @{ ServerInstance = $DbHost; Username = $master.username; Password = $master.password; Encrypt = 'Mandatory'; TrustServerCertificate = $false }
+        Invoke-Sqlcmd @conn -Query $sql
+
+        $grants = @(
+            @{ Login = $secret.admin_user;       Password = $secret.admin_password;       Db = '${catalog_platform}'; Roles = @('db_owner') },
+            @{ Login = $secret.runtime_user;     Password = $secret.runtime_password;     Db = '${catalog_platform}'; Roles = @('db_datareader', 'db_datawriter') },
+            @{ Login = $secret.log_admin_user;   Password = $secret.log_admin_password;   Db = '${catalog_log}';      Roles = @('db_owner') },
+            @{ Login = $secret.log_runtime_user; Password = $secret.log_runtime_password; Db = '${catalog_log}';      Roles = @('db_datareader', 'db_datawriter') },
+            @{ Login = $secret.session_user;     Password = $secret.session_password;     Db = '${catalog_session}';  Roles = @('db_owner') }
+        )
+        foreach ($g in $grants) {
+            $q = "IF SUSER_ID('$($g.Login)') IS NULL CREATE LOGIN [$($g.Login)] WITH PASSWORD = '$($g.Password)', CHECK_POLICY = ON;" +
+                 " ELSE ALTER LOGIN [$($g.Login)] WITH PASSWORD = '$($g.Password)';"
+            Invoke-Sqlcmd @conn -Query $q
+            $q = "USE [$($g.Db)]; IF USER_ID('$($g.Login)') IS NULL CREATE USER [$($g.Login)] FOR LOGIN [$($g.Login)];"
+            foreach ($r in $g.Roles) { $q += " ALTER ROLE [$r] ADD MEMBER [$($g.Login)];" }
+            Invoke-Sqlcmd @conn -Query $q
+        }
+    }
+
+    # ------------------------------------------------------------ platform install
+    Install-OSServerPreReqs -MajorVersion '11'
+    if ($IsLifetime) {
+        Install-OSServer -Version $PlatformVersion -WithLifeTime
+    } else {
+        Install-OSServer -Version $PlatformVersion
+    }
+
+    if ($Role -eq 'controller') {
+        Install-OSRabbitMQ -VirtualHosts @('/OutSystems') -RemoveGuestUser -AdminUser (New-Cred $secret.cache_user $secret.cache_password)
+    }
+
+    New-OSServerConfig -DatabaseProvider 'SQL'
+
+    # Front-ends must share the controller's private.key, or encrypted settings and sessions break.
+    $installDir = (Get-OSServerInfo).InstallDir
+    $keyPath    = Join-Path $installDir 'private.key'
+    if ($Role -eq 'frontend') {
+        Wait-Port $ControllerFqdn 12000
+        $deadline = (Get-Date).AddMinutes(30)
+        do {
+            try { $key = (Get-SECSecretValue -SecretId '${private_key_secret_arn}' -Region $Region).SecretString } catch { $key = $null }
+            if (-not $key) { Start-Sleep -Seconds 30 }
+        } until ($key -or (Get-Date) -gt $deadline)
+        if (-not $key) { throw 'Controller has not published private.key' }
+        Set-Content -Path $keyPath -Value $key -NoNewline
+    }
+
+    $adv = if ([bool]::Parse('${db_force_ssl}')) { 'Encrypt=True;TrustServerCertificate=False' } else { '' }
+
+    $settings = @(
+        @('PlatformDatabaseConfiguration', 'Server',            $DbHost,                   $false),
+        @('PlatformDatabaseConfiguration', 'Catalog',           '${catalog_platform}',     $false),
+        @('PlatformDatabaseConfiguration', 'AdminUser',         $secret.admin_user,        $false),
+        @('PlatformDatabaseConfiguration', 'AdminPassword',     $secret.admin_password,    $true),
+        @('PlatformDatabaseConfiguration', 'RuntimeUser',       $secret.runtime_user,      $false),
+        @('PlatformDatabaseConfiguration', 'RuntimePassword',   $secret.runtime_password,  $true),
+        @('PlatformDatabaseConfiguration', 'AdvancedSettings',  $adv,                      $false),
+        @('LoggingDatabaseConfiguration',  'Server',            $DbHost,                   $false),
+        @('LoggingDatabaseConfiguration',  'Catalog',           '${catalog_log}',          $false),
+        @('LoggingDatabaseConfiguration',  'AdminUser',         $secret.log_admin_user,    $false),
+        @('LoggingDatabaseConfiguration',  'AdminPassword',     $secret.log_admin_password, $true),
+        @('LoggingDatabaseConfiguration',  'RuntimeUser',       $secret.log_runtime_user,  $false),
+        @('LoggingDatabaseConfiguration',  'RuntimePassword',   $secret.log_runtime_password, $true),
+        @('LoggingDatabaseConfiguration',  'AdvancedSettings',  $adv,                      $false),
+        @('SessionDatabaseConfiguration',  'Server',            $DbHost,                   $false),
+        @('SessionDatabaseConfiguration',  'Catalog',           '${catalog_session}',      $false),
+        @('SessionDatabaseConfiguration',  'SessionUser',       $secret.session_user,      $false),
+        @('SessionDatabaseConfiguration',  'SessionPassword',   $secret.session_password,  $true),
+        @('SessionDatabaseConfiguration',  'AdvancedSettings',  $adv,                      $false),
+        @('ServiceConfiguration',          'CompilerServerHostname', $ControllerFqdn,      $false),
+        @('CacheInvalidationConfiguration','ServiceHost',       $ControllerFqdn,           $false),
+        @('CacheInvalidationConfiguration','ServiceUsername',   $secret.cache_user,        $false),
+        @('CacheInvalidationConfiguration','ServicePassword',   $secret.cache_password,    $true),
+        @('CacheInvalidationConfiguration','VirtualHost',       '/OutSystems',             $false)
+    )
+    foreach ($s in $settings) {
+        if ($s[3]) { Set-OSServerConfig -SettingSection $s[0] -Setting $s[1] -Value $s[2] -Encrypted }
+        else       { Set-OSServerConfig -SettingSection $s[0] -Setting $s[1] -Value $s[2] }
+    }
+
+    $apply = @{
+        Apply                = $true
+        PlatformDBCredential = New-Cred $secret.admin_user $secret.admin_password
+        SessionDBCredential  = New-Cred $secret.session_user $secret.session_password
+        LogDBCredential      = New-Cred $secret.log_admin_user $secret.log_admin_password
+    }
+    if ($Role -eq 'controller') {
+        $apply.ConfigureCacheInvalidationService = $true
+        $apply.InstallServiceCenter              = $true
+    } else {
+        $apply.SkipSessionRebuild = $true   # the controller already built the session schema
+    }
+    Set-OSServerConfig @apply
+
+    if ($Role -eq 'controller') {
+        # Publish private.key for the front-ends (first boot only).
+        $existing = $null
+        try { $existing = (Get-SECSecretValue -SecretId '${private_key_secret_arn}' -Region $Region).SecretString } catch {}
+        if (-not $existing) {
+            Write-SECSecretValue -SecretId '${private_key_secret_arn}' -SecretString (Get-Content $keyPath -Raw) -Region $Region | Out-Null
+        }
+
+        Install-OSPlatformSystemComponents
+        $license = Join-Path $State 'license.lic'
+        Read-S3Object -BucketName '${artifacts_bucket}' -Key '${license_s3_key}' -File $license -Region $Region | Out-Null
+        Install-OSPlatformLicense -Path $license
+        Remove-Item $license -Force
+
+        if ($IsLifetime) { Install-OSPlatformLifetime }
+    }
+
+    Set-OSServerPerformanceTunning
+
+    # ------------------------------------------------------------ IIS: TLS inside the VPC + LB health page
+    $cert = New-SelfSignedCertificate -DnsName $env:COMPUTERNAME, $ControllerFqdn -CertStoreLocation Cert:\LocalMachine\My -NotAfter (Get-Date).AddYears(3)
+    Import-Module WebAdministration
+    if (-not (Get-WebBinding -Name 'Default Web Site' -Protocol https)) {
+        New-WebBinding -Name 'Default Web Site' -Protocol https -Port 443
+    }
+    (Get-WebBinding -Name 'Default Web Site' -Protocol https).AddSslCertificate($cert.Thumbprint, 'My')
+    Set-Content -Path 'C:\inetpub\wwwroot\lb-health.html' -Value 'OK'
+
+    New-Item -ItemType File -Path $Done -Force | Out-Null
+    Write-Output "Bootstrap completed for $Environment ($Role)."
+}
+catch {
+    Write-Output "BOOTSTRAP FAILED: $($_.Exception.Message)"
+    Write-Output $_.ScriptStackTrace
+    New-Item -ItemType File -Path (Join-Path $State 'bootstrap.failed') -Force | Out-Null
+    throw
+}
+finally {
+    Stop-Transcript
+}

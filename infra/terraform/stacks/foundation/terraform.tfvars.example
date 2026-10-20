@@ -1,0 +1,2 @@
+alarm_emails      = ["platform-oncall@example.gov.sg"]
+github_repository = "your-org/sg-weather-insights"
