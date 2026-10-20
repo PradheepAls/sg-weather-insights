@@ -30,21 +30,26 @@ jobs:
         run: terraform fmt -check -recursive infra/terraform
       - name: validate + test modules
         run: |
-          set -euo pipefail
-          for dir in infra/terraform/modules/*/; do
+          set -uo pipefail
+          # Failures are re-emitted as a single annotation so they are readable from the
+          # checks API / PR UI without opening the raw log.
+          fail() {
+            msg=$(tail -n 80 "$2" | sed -e 's/\x1b\[[0-9;]*m//g' -e 's/%/%25/g' -e 's/\r//g' | sed ':a;N;$!ba;s/\n/%0A/g')
+            echo "::error title=$1::$msg"; status=1
+          }
+          status=0
+          for dir in infra/terraform/modules/*/ infra/terraform/bootstrap/ infra/terraform/stacks/*/; do
+            log=$(mktemp)
             echo "::group::$dir"
-            terraform -chdir="$dir" init -backend=false -input=false
-            terraform -chdir="$dir" validate
-            terraform -chdir="$dir" test
+            terraform -chdir="$dir" init -backend=false -input=false -no-color >"$log" 2>&1 \
+              && terraform -chdir="$dir" validate -no-color >>"$log" 2>&1 \
+              && { [ ! -d "$dir/tests" ] || terraform -chdir="$dir" test -no-color >>"$log" 2>&1; }
+            rc=$?
+            cat "$log"
             echo "::endgroup::"
+            [ $rc -eq 0 ] || fail "$dir" "$log"
           done
-      - name: validate stacks
-        run: |
-          set -euo pipefail
-          for dir in infra/terraform/bootstrap infra/terraform/stacks/*/; do
-            terraform -chdir="$dir" init -backend=false -input=false
-            terraform -chdir="$dir" validate
-          done
+          exit $status
       - uses: terraform-linters/setup-tflint@v4
         with:
           tflint_version: v0.54.0

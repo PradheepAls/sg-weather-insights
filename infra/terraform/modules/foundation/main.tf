@@ -90,6 +90,21 @@ resource "aws_s3_bucket_public_access_block" "artifacts" {
   restrict_public_buckets = true
 }
 
+resource "aws_s3_bucket_lifecycle_configuration" "artifacts" {
+  bucket = aws_s3_bucket.artifacts.id
+  rule {
+    id     = "housekeeping"
+    status = "Enabled"
+    filter {}
+    noncurrent_version_expiration {
+      noncurrent_days = 90
+    }
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
+}
+
 resource "aws_s3_bucket_policy" "artifacts" {
   bucket = aws_s3_bucket.artifacts.id
   policy = jsonencode({
@@ -112,6 +127,11 @@ resource "aws_s3_bucket_policy" "artifacts" {
 resource "aws_s3_bucket" "alb_logs" {
   bucket = "${var.name}-alb-logs-${local.account_id}"
   tags   = var.tags
+}
+
+resource "aws_s3_bucket_versioning" "alb_logs" {
+  bucket = aws_s3_bucket.alb_logs.id
+  versioning_configuration { status = "Enabled" }
 }
 
 resource "aws_s3_bucket_server_side_encryption_configuration" "alb_logs" {
@@ -140,6 +160,12 @@ resource "aws_s3_bucket_lifecycle_configuration" "alb_logs" {
       storage_class = "STANDARD_IA"
     }
     expiration { days = var.log_retention_days }
+    noncurrent_version_expiration {
+      noncurrent_days = 30
+    }
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
   }
 }
 

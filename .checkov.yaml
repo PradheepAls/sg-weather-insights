@@ -17,6 +17,7 @@ skip-check:
   - CKV_AWS_8     # EBS encryption (launch template)
   - CKV_AWS_126   # detailed monitoring (launch template)
   - CKV_AWS_135   # EBS optimised (launch template)
+  - CKV2_AWS_41   # instance profile is attached through the launch template
   # Not applicable / accepted.
   - CKV_AWS_161   # RDS IAM auth: not supported by SQL Server
   - CKV_AWS_145   # ALB log bucket must use SSE-S3 (ALB cannot write to SSE-KMS)
