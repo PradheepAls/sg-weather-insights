@@ -27,7 +27,18 @@ jobs:
       - run: terraform fmt -check -recursive
       - run: terraform init -backend=false -input=false
       - run: terraform validate
-      - run: terraform test
+      - name: terraform test
+        shell: bash
+        run: |
+          set +e
+          terraform test -no-color > test.log 2>&1; rc=$?
+          cat test.log
+          if [ $rc -ne 0 ]; then
+            # Surface failures as annotations so they show on the PR without opening the log.
+            grep -E '^(Error|  run ".*"\.\.\. fail)' test.log | head -n 8 | while IFS= read -r l; do echo "::error title=terraform test::$l"; done
+            echo "::error title=terraform test (detail)::$(grep -A12 '^Error' test.log | head -n 60 | sed -e 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')"
+          fi
+          exit $rc
       - uses: terraform-linters/setup-tflint@v4
         with:
           tflint_version: v0.54.0
