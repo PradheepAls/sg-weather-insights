@@ -93,7 +93,7 @@ run "dev_is_secure_by_default" {
     error_message = "Server disks must be encrypted."
   }
   assert {
-    condition     = alltrue([for r in aws_security_group.db.ingress : r.from_port == 1433 && length(r.cidr_blocks) == 0])
+    condition     = alltrue([for r in aws_security_group.db.ingress : r.from_port == 1433 && try(length(r.cidr_blocks), 0) == 0])
     error_message = "SQL Server must only be reachable from the server security group."
   }
   assert {
