@@ -26,27 +26,30 @@ resource "aws_internet_gateway" "this" {
 }
 
 resource "aws_subnet" "public" {
-  count             = local.az_count
-  vpc_id            = aws_vpc.this.id
-  cidr_block        = local.public_cidrs[count.index]
-  availability_zone = var.azs[count.index]
-  tags              = merge(var.tags, { Name = "${var.name}-public-${var.azs[count.index]}", Tier = "public" })
+  count                   = local.az_count
+  vpc_id                  = aws_vpc.this.id
+  cidr_block              = local.public_cidrs[count.index]
+  availability_zone       = var.azs[count.index]
+  map_public_ip_on_launch = false # ALB/NAT get their own IPs; no instance is ever public
+  tags                    = merge(var.tags, { Name = "${var.name}-public-${var.azs[count.index]}", Tier = "public" })
 }
 
 resource "aws_subnet" "app" {
-  count             = local.az_count
-  vpc_id            = aws_vpc.this.id
-  cidr_block        = local.app_cidrs[count.index]
-  availability_zone = var.azs[count.index]
-  tags              = merge(var.tags, { Name = "${var.name}-app-${var.azs[count.index]}", Tier = "app" })
+  count                   = local.az_count
+  vpc_id                  = aws_vpc.this.id
+  cidr_block              = local.app_cidrs[count.index]
+  availability_zone       = var.azs[count.index]
+  map_public_ip_on_launch = false # ALB/NAT get their own IPs; no instance is ever public
+  tags                    = merge(var.tags, { Name = "${var.name}-app-${var.azs[count.index]}", Tier = "app" })
 }
 
 resource "aws_subnet" "data" {
-  count             = local.az_count
-  vpc_id            = aws_vpc.this.id
-  cidr_block        = local.data_cidrs[count.index]
-  availability_zone = var.azs[count.index]
-  tags              = merge(var.tags, { Name = "${var.name}-data-${var.azs[count.index]}", Tier = "data" })
+  count                   = local.az_count
+  vpc_id                  = aws_vpc.this.id
+  cidr_block              = local.data_cidrs[count.index]
+  availability_zone       = var.azs[count.index]
+  map_public_ip_on_launch = false # ALB/NAT get their own IPs; no instance is ever public
+  tags                    = merge(var.tags, { Name = "${var.name}-data-${var.azs[count.index]}", Tier = "data" })
 }
 
 resource "aws_eip" "nat" {

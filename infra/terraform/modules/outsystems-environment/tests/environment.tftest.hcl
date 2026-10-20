@@ -6,6 +6,57 @@ mock_provider "aws" {
   mock_data "aws_region" {
     defaults = { region = "ap-southeast-1" }
   }
+
+  # The provider validates ARN-typed arguments even with mocked values, so give every
+  # resource whose ARN feeds another resource a well-formed one.
+  mock_resource "aws_lb" {
+    defaults = {
+      arn        = "arn:aws:elasticloadbalancing:ap-southeast-1:111122223333:loadbalancer/app/sgw/0123456789abcdef"
+      arn_suffix = "app/sgw/0123456789abcdef"
+      dns_name   = "internal-sgw-123.ap-southeast-1.elb.amazonaws.com"
+      zone_id    = "Z1LMS91P8CMLE5"
+    }
+  }
+  mock_resource "aws_lb_target_group" {
+    defaults = {
+      arn        = "arn:aws:elasticloadbalancing:ap-southeast-1:111122223333:targetgroup/sgw/0123456789abcdef"
+      arn_suffix = "targetgroup/sgw/0123456789abcdef"
+    }
+  }
+  mock_resource "aws_lb_listener" {
+    defaults = { arn = "arn:aws:elasticloadbalancing:ap-southeast-1:111122223333:listener/app/sgw/0123456789abcdef/0123456789abcdef" }
+  }
+  mock_resource "aws_iam_role" {
+    defaults = { arn = "arn:aws:iam::111122223333:role/sgw-mock" }
+  }
+  mock_resource "aws_iam_instance_profile" {
+    defaults = { arn = "arn:aws:iam::111122223333:instance-profile/sgw-mock" }
+  }
+  mock_resource "aws_secretsmanager_secret" {
+    defaults = { arn = "arn:aws:secretsmanager:ap-southeast-1:111122223333:secret:sgw-mock-AbCdEf" }
+  }
+  mock_resource "aws_wafv2_web_acl" {
+    defaults = { arn = "arn:aws:wafv2:ap-southeast-1:111122223333:regional/webacl/sgw/0123-4567" }
+  }
+  mock_resource "aws_cloudwatch_log_group" {
+    defaults = { arn = "arn:aws:logs:ap-southeast-1:111122223333:log-group:mock" }
+  }
+  mock_resource "aws_ssm_parameter" {
+    defaults = { arn = "arn:aws:ssm:ap-southeast-1:111122223333:parameter/mock" }
+  }
+  mock_resource "aws_instance" {
+    defaults = {
+      id         = "i-0123456789abcdef0"
+      private_ip = "10.20.128.10"
+    }
+  }
+  mock_resource "aws_db_instance" {
+    defaults = {
+      arn        = "arn:aws:rds:ap-southeast-1:111122223333:db:sgw-mock"
+      address    = "sgw-mock.abc123.ap-southeast-1.rds.amazonaws.com"
+      identifier = "sgw-mock"
+    }
+  }
 }
 
 variables {
