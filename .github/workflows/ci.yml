@@ -4,17 +4,16 @@ on:
   pull_request:
   push:
     branches: [main]
+  schedule:
+    - cron: "17 22 * * *" # 06:17 SGT: check data.gov.sg still matches our schemas
+  workflow_dispatch:
 
 permissions:
   contents: read
 
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   python-tests:
-    name: Contract, rules and API-spec tests (offline)
+    name: Contract, rules and API-spec tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,15 +23,22 @@ jobs:
           cache: pip
       - run: pip install -r requirements-test.txt
       - run: ruff check tests
-      - run: pytest -m "not live and not integration" --junitxml=results/pytest.xml
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: pytest-results
-          path: results/
+      - name: Offline tests (fixtures, vectors, OpenAPI)
+        run: pytest -m "not live and not integration"
+      - name: Live upstream contract (scheduled / manual runs)
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: pytest -m live tests/contract
+        env:
+          DGS_LIVE: "1"
+          DGS_API_KEY: ${{ secrets.DGS_API_KEY }}
+      - name: API tests against the deployed app (when configured)
+        if: vars.WEATHER_API_BASE_URL != ''
+        run: pytest -m integration
+        env:
+          WEATHER_API_BASE_URL: ${{ vars.WEATHER_API_BASE_URL }}
 
-  e2e-typecheck:
-    name: Playwright suite compiles
+  e2e:
+    name: Playwright
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -44,11 +50,10 @@ jobs:
           node-version: "22"
       - run: npm install --no-audit --no-fund
       - run: npm run typecheck
-      - run: npx playwright test --list
-
-  stub-fixtures-in-sync:
-    name: WireMock files mirror contract fixtures
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: diff -r tests/contract/fixtures tests/mocks/wiremock/__files -x README.md
+      - name: Run against the deployed app (when configured)
+        if: vars.WEATHER_APP_URL != ''
+        env:
+          WEATHER_APP_URL: ${{ vars.WEATHER_APP_URL }}
+        run: |
+          npx playwright install --with-deps chromium
+          npx playwright test

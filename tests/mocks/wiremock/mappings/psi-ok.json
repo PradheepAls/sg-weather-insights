@@ -1,5 +1,0 @@
-{
-  "priority": 10,
-  "request": { "method": "GET", "urlPath": "/v2/real-time/api/psi" },
-  "response": { "status": 200, "headers": { "Content-Type": "application/json" }, "bodyFileName": "psi_latest.json" }
-}

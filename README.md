@@ -1,142 +1,106 @@
 # SG Weather Insights
 
-An OutSystems 11 Reactive Web application for exploring Singapore's real-time weather and air
-quality, built on NEA's open APIs from [data.gov.sg](https://data.gov.sg). It ingests seven
-feeds every five minutes into a local time series, and lets users see conditions island-wide
-on a map, find and compare stations, drill into trends from 6 hours to 30 days, and check
-regional PSI / PM2.5 with NEA health bands.
-
-This repository holds everything outside the OutSystems platform: architecture and
-decisions, the implementation spec for the OutSystems modules, the public API contract,
-Terraform for a self-managed OutSystems 11 factory on AWS, automated tests at every layer,
-and CI/CD.
+An OutSystems 11 Reactive Web app for exploring Singapore's real-time weather and air quality
+from [data.gov.sg](https://data.gov.sg) (NEA real-time APIs). Users pick a metric (temperature,
+humidity, wind, rainfall), see island-wide min/avg/max and every station's latest value,
+search and sort stations, open a station to chart its last 24 hours to 7 days, and check
+today's PSI by region with NEA health bands.
 
 | | |
 |---|---|
-| **Live app** | `https://<your-environment>/Weather/` — access details provided separately |
-| **API** | `https://<your-environment>/Weather_API/rest/v1` — contract in [`outsystems/api/weather-api.openapi.yaml`](outsystems/api/weather-api.openapi.yaml) |
-| **Data** | `api-open.data.gov.sg/v2/real-time/api/` — air-temperature, relative-humidity, wind-speed, wind-direction, rainfall, psi, pm25 |
+| **App** | `https://<your-environment>/Weather/` (access details provided separately) |
+| **API** | `https://<your-environment>/Weather_CS/rest/WeatherAPI` — [OpenAPI contract](outsystems/api/weather-api.openapi.yaml) |
+| **Data** | `api-open.data.gov.sg/v2/real-time/api/` — air-temperature, relative-humidity, wind-speed, rainfall, psi |
 
-## Contents
-
-| Path | What it is |
-|---|---|
-| [`docs/architecture.md`](docs/architecture.md) | Context, module layering, ingestion design, data model, screens, AWS deployment |
-| [`docs/adr/`](docs/adr) | Decisions with alternatives and consequences |
-| [`docs/outsystems-build-guide.md`](docs/outsystems-build-guide.md) | Module-by-module implementation spec (entities, actions, SQL, timers, screens, test IDs) |
-| [`docs/walkthrough.md`](docs/walkthrough.md) | Demo script and design trade-offs for the review session |
-| [`outsystems/api/`](outsystems/api) | OpenAPI 3 contract of the exposed REST API |
-| [`infra/terraform/`](infra/terraform) | IaC for LifeTime / Dev / Test / Prod on AWS ([README](infra/terraform/README.md)) |
-| [`tests/`](tests) | Contract, rules, normalisation, API, E2E, accessibility, BDD specs, upstream stub, load |
-| [`.github/workflows/`](.github/workflows) | CI, IaC checks, OutSystems delivery pipeline, nightly upstream drift check |
-
-## Architecture in one page
+## Design
 
 ```mermaid
 flowchart LR
-  subgraph OutSystems["OutSystems 11 (Reactive)"]
-    direction TB
-    W[Weather<br/>end-user app] --> CS[Weather_CS<br/>entities · timers · actions]
-    API[Weather_API<br/>REST v1] --> CS
-    CS --> IS[DGS_IS<br/>consume + normalise]
-    W & CS --> LIB[WeatherRules_Lib<br/>bands · freshness · units]
+  user([User]) --> W[Weather<br/>3 screens]
+  ext([API client / tests]) --> API[WeatherAPI<br/>REST]
+  subgraph CS[Weather_CS]
+    API
+    T[Timer_Sync<br/>every 15 min]
+    E[(Station · Reading<br/>AirQuality · SyncLog)]
   end
-  IS -->|every 5 min, retry/backoff| DGS[(data.gov.sg)]
-  CS --> DB[(SQL Server<br/>readings, hourly rollups, sync log)]
-  Users([Users]) --> W
-  Ext([Consumers / tests]) --> API
+  W --> E
+  API --> E
+  T --> IS[DGS_IS<br/>call + parse]
+  IS --> D[(data.gov.sg)]
+  T --> E
 ```
 
-* **Ingest, don't proxy.** One upstream call per feed per five minutes regardless of traffic,
-  so rate limits never scale with users, outages degrade to "stale" rather than "blank",
-  and history beyond the API's latest-reading default is available for trends.
-* **Idempotent by construction.** A unique key on station + metric + timestamp and a
-  set-based `MERGE` make re-runs, overlaps and backfills safe.
-* **Rules in one place.** Banding, freshness, unit and compass rules live in a pure library
-  used on both client (map colours) and server (API), driven by shared test vectors.
-* **Observable.** Every sync writes a `SyncRun`; `/health`, the admin screen, the UI stale
-  banner and a CloudWatch alarm all read from it.
+Three modules following the OutSystems 4-layer canvas:
 
-## Running the tests
+| Module | Layer | Responsibility |
+|---|---|---|
+| `DGS_IS` | Foundation | Calls data.gov.sg and parses the JSON into simple lists. Parsing is a separate action, so tests run on saved JSON without the network. |
+| `Weather_CS` | Core | Entities, the sync timer, read actions, PSI banding, the exposed REST API. |
+| `Weather` | End-user | Dashboard, Station detail, Air quality. |
+
+Key decisions:
+
+* **Store, don't proxy.** A timer pulls 5 feeds every 15 minutes into the database. Upstream
+  load is fixed no matter how many users there are (no rate-limit problems), the app keeps
+  working if data.gov.sg is down, and charts have history (the API only returns the latest
+  reading). Trade-off: data is up to 15 minutes old, shown as "As of HH:mm".
+* **Idempotent sync.** A batch whose timestamp is already stored is skipped, and a unique
+  index on (station, metric, time) prevents duplicates if runs ever overlap.
+* **One feed failing doesn't stop the others.** Each feed is committed separately and every run
+  is written to `SyncLog`.
+* **Bounded storage.** Each sync also deletes readings older than 7 days.
+* **Accessible.** PSI bands are written out, not shown by colour alone; WCAG 2.1 AA checked by
+  automated tests.
+
+Build steps: [`docs/build-guide.md`](docs/build-guide.md).
+
+## Tests
+
+| What | Where | Runs |
+|---|---|---|
+| Upstream contract — data.gov.sg responses match the JSON Schemas we rely on | `tests/contract` | every push (saved fixtures), daily (live API) |
+| PSI band rule — shared vectors also used by the OutSystems test | `tests/vectors`, `tests/reference` | every push |
+| Business logic in OutSystems (BDDFramework) — parsing, error handling, banding, idempotency | `tests/bdd.md` → `Weather_Tests` | in the OutSystems environment |
+| REST API — schema, consistency, 400/404 handling, NEA bands | `tests/api` | when `WEATHER_API_BASE_URL` is set |
+| UI journeys + accessibility (Playwright + axe) | `tests/e2e` | when `WEATHER_APP_URL` is set |
+| Infrastructure — security and Prod guard-rails, mocked AWS | `infra/terraform/tests` | every push to `infra/` (+ tflint, Checkov) |
 
 ```bash
-make install
-make test                    # offline: upstream contract on fixtures, rule vectors, normaliser, API spec
-make test-live               # same schemas against the real data.gov.sg API
-WEATHER_API_BASE_URL=https://<host>/Weather_API/rest/v1 make test-api
-WEATHER_APP_URL=https://<host>/Weather/ make e2e          # Playwright + axe, desktop + mobile
-make tf-test                 # terraform fmt/validate/test (mocked AWS), tflint, checkov
-make stub                    # WireMock data.gov.sg stub for the OutSystems BDD integration suite
+make install && make test                                   # offline suite
+WEATHER_API_BASE_URL=https://<host>/Weather_CS/rest/WeatherAPI make test-api
+WEATHER_APP_URL=https://<host>/Weather/ make e2e
+make tf-test
 ```
 
-| Layer | Where | When it runs |
-|---|---|---|
-| Upstream contract (JSON Schema) | `tests/contract` | every push (fixtures), nightly (live, opens an issue on drift) |
-| Business rules (shared vectors) | `tests/vectors`, `tests/reference`, BDD `rules.feature` | every push; inside OutSystems on every tag |
-| Ingestion + resilience (BDD Framework) | `tests/bdd/*.feature` → `Weather_Tests` | pipeline, on Development via CI/CD Probe |
-| API contract | `tests/api` | every push (spec), after deploy to Test (live) |
-| UI journeys + WCAG 2.1 AA | `tests/e2e` | after deploy to Test |
-| Load | `tests/load/smoke.js` (k6) | on demand |
-| Infrastructure | `infra/terraform/modules/*/tests` | every push touching `infra/` |
-
-## Delivery pipeline
-
-```mermaid
-flowchart LR
-  tag([Tag in LifeTime]) --> bdd[BDD tests on Dev<br/>via CI/CD Probe]
-  bdd --> dt[Deploy Dev → Test<br/>LifeTime API]
-  dt --> acc[API + E2E + a11y<br/>on Test]
-  acc --> gate{{Approval<br/>GitHub Environment}}
-  gate --> dp[Deploy Test → Prod<br/>runtime app only]
-  dp --> smoke[/health smoke/]
-```
-
-Uses [`outsystems-pipeline`](https://github.com/OutSystems/outsystems-pipeline) for LifeTime
-and BDD orchestration. The test application is never part of the Prod deployment plan.
-Required repository secrets: `LIFETIME_URL`, `LIFETIME_TOKEN` (LifeTime service account),
-`DEV_URL`, `TEST_API_URL`, `TEST_APP_URL`, `PROD_API_URL`, optional `DGS_API_KEY`.
+To run the API and UI tests in CI, set repository variables `WEATHER_API_BASE_URL` and
+`WEATHER_APP_URL`.
 
 ## Infrastructure
 
-Terraform provisions a self-managed OutSystems 11 factory in `ap-southeast-1`: separate
-non-prod and prod VPCs (peered for LifeTime), per-environment RDS SQL Server, Windows
-servers bootstrapped with `Outsystems.SetupTools`, ALB with admin-path restrictions, WAF on
-Prod, Secrets Manager with write-only secrets (nothing sensitive in state), SSM-only access,
-CloudWatch logs/alarms, and GitHub OIDC for CI. Production guard-rails (Multi-AZ, deletion
-protection, ≥ 2 front-ends, dedicated controller) are enforced as plan-time preconditions and
-covered by `terraform test`. Details and runbook: [`infra/terraform/README.md`](infra/terraform/README.md).
+`infra/terraform` provisions one self-managed OutSystems 11 environment on AWS: VPC with
+private subnets, RDS SQL Server, a Deployment Controller plus a front-end Auto Scaling group,
+an HTTPS load balancer that blocks Service Center/LifeTime from the public, Secrets Manager
+(passwords never in Terraform state), KMS encryption, SSM access instead of RDP, and alarms.
+Run it per environment with `envs/<env>.tfvars`. Details: [`infra/terraform/README.md`](infra/terraform/README.md).
 
 ## Assumptions
 
-* **Demo vs target platform.** The demo build runs on an OutSystems-hosted O11 environment;
-  the Terraform describes the production target. The application is identical on both
-  (ADR 0001).
-* **Freshness over completeness.** Five-minute ingestion is fresh enough for weather; the UI
-  always states "as of" time. Raw readings are kept 7 days and hourly aggregates 400 days.
-* **Anonymous access.** The data is open and the app holds no personal data, so public
-  screens need no login; operational actions require the `WeatherAdmin` role.
-* **Upstream shapes** were verified against live responses on 2026-10-20 and are pinned as
-  fixtures; the nightly job detects drift.
-* **Time.** All stored times are server-local; servers and the database run in Singapore
-  time (no DST), with a site property to correct for UTC-based environments.
+* The demo runs on an OutSystems-hosted O11 environment; the Terraform describes how the
+  platform would run on AWS. The application is the same on both.
+* The data is public and the app stores no personal data, so screens need no login.
+* Times are stored in Singapore time (the servers and database run in Singapore time; on a UTC
+  server the parse step would add 8 hours).
+* data.gov.sg response shapes were verified on 2026-10-20 and saved as fixtures; the daily
+  live contract test catches changes.
 
-## Trade-offs and what I would do next
+## Left out on purpose (next steps)
 
-| Chose | Over | Because | Revisit when |
-|---|---|---|---|
-| Local store + timers | Live proxy | Rate limits, history, resilience | Never for this use case |
-| `LatestReading` denormalisation | Window query each time | Dashboard is the hottest path | Read volume is low enough not to matter |
-| Single `MERGE` via `OPENJSON` | Entity actions per row | One statement per batch instead of one per row (rainfall alone is ~90 rows every 5 min) | Moving to a non-SQL Server DB |
-| Self-managed O11 on AWS | ODC | Brief asks for platform IaC | Organisation adopts ODC |
-| Separate RDS per environment | Shared non-prod RDS | Isolation, simple restore | Cost pressure (documented lever) |
-| Plain Terraform + var files | Terragrunt / workspaces | Explicit, fewer tools | More accounts/regions |
-
-Next steps: forecast endpoints (2-hour / 24-hour) alongside observations; station-level
-anomaly flags (value outside 3σ of its own hourly history); push alerts when PSI crosses a
-band; Transit Gateway if more VPCs join; scheduled non-prod shutdown.
+Map view, 2-hour forecasts, backfilling past days, retry with backoff (a failed feed simply
+retries on the next run), hourly rollups for longer history, a LifeTime/CI deployment
+pipeline, WAF and extra logging on the AWS side. A more extensive version of the design is on
+the [`extended-design`](https://github.com/PradheepAls/sg-weather-insights/tree/extended-design) branch.
 
 ## Data licence
 
-Contains information from Realtime Weather Readings and PSI/PM2.5 datasets accessed from
-data.gov.sg, made available under the terms of the
+Contains information from data.gov.sg made available under the terms of the
 [Singapore Open Data Licence version 1.0](https://data.gov.sg/open-data-licence).

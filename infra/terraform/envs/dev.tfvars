@@ -1,0 +1,10 @@
+environment             = "dev"
+vpc_cidr                = "10.20.0.0/16"
+alb_internal            = true
+alb_ingress_cidrs       = ["10.20.0.0/16", "10.99.0.0/16"] # VPC + corporate VPN
+admin_cidrs             = ["10.99.0.0/16"]
+certificate_arn         = "arn:aws:acm:ap-southeast-1:111122223333:certificate/replace-me"
+platform_server_version = "11.31.0" # pin to the version your licence supports
+license_bucket          = "replace-me-licences"
+license_key             = "licenses/dev.lic"
+frontend_count          = 0 # the controller also serves traffic

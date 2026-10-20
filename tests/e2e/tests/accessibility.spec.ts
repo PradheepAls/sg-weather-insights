@@ -6,7 +6,6 @@ test.beforeEach(requireBaseUrl);
 
 const screens: Array<[string, string]> = [
   ['', 'screen-dashboard'],
-  ['Stations', 'screen-stations'],
   ['StationDetail?StationId=S24', 'screen-station-detail'],
   ['AirQuality', 'screen-air-quality'],
 ];
@@ -16,7 +15,6 @@ for (const [path, id] of screens) {
     await openScreen(page, path, id);
     const { violations } = await new AxeBuilder({ page })
       .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'])
-      .exclude('[data-testid="map"]') // third-party map tiles are out of our control
       .analyze();
     const serious = violations.filter((v) => ['serious', 'critical'].includes(v.impact ?? ''));
     expect(serious.map((v) => `${v.id}: ${v.nodes.length} nodes`)).toEqual([]);

@@ -3,89 +3,19 @@ info:
   title: SG Weather Insights API
   version: 1.0.0
   description: |
-    Read-only API exposed by the `Weather_API` module (OutSystems exposed REST API named `v1`).
-    Serves data already ingested from data.gov.sg, so it is unaffected by upstream rate limits.
-    All timestamps are ISO-8601 in Singapore time (`+08:00`). Responses carry
-    `Cache-Control: public, max-age=60`. Errors always use the `Error` envelope.
+    Read-only REST API exposed by the `Weather_CS` module (exposed REST API `WeatherAPI`).
+    Serves data already ingested from data.gov.sg, so it is not affected by upstream rate
+    limits. Timestamps are Singapore local time.
 servers:
-  - url: https://{host}/Weather_API/rest/v1
+  - url: https://{host}/Weather_CS/rest/WeatherAPI
     variables:
       host:
-        default: weather-test.example.gov.sg
+        default: your-environment.outsystemscloud.com
 paths:
-  /health:
-    get:
-      operationId: GetHealth
-      summary: Ingestion freshness per upstream endpoint
-      responses:
-        "200":
-          description: Health summary. `status` is `Degraded` if any endpoint is Stale or NoData.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Health" }
-  /metrics:
-    get:
-      operationId: ListMetrics
-      responses:
-        "200":
-          description: Metrics available for exploration
-          content:
-            application/json:
-              schema:
-                type: array
-                items: { $ref: "#/components/schemas/Metric" }
   /stations:
     get:
-      operationId: ListStations
-      parameters:
-        - { name: metric, in: query, schema: { $ref: "#/components/schemas/MetricCode" }, description: Only stations reporting this metric }
-        - { name: region, in: query, schema: { $ref: "#/components/schemas/RegionCode" } }
-        - { name: q, in: query, schema: { type: string, maxLength: 50 }, description: Case-insensitive match on name or ID }
-        - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
-        - { name: pageSize, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }
-      responses:
-        "200":
-          description: Page of stations with their latest readings
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/StationPage" }
-        "400": { $ref: "#/components/responses/BadRequest" }
-  /stations/{stationId}:
-    get:
-      operationId: GetStation
-      parameters:
-        - { $ref: "#/components/parameters/StationId" }
-      responses:
-        "200":
-          description: Station with latest reading per metric
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Station" }
-        "404": { $ref: "#/components/responses/NotFound" }
-  /stations/{stationId}/readings:
-    get:
-      operationId: GetStationSeries
-      parameters:
-        - { $ref: "#/components/parameters/StationId" }
-        - { name: metric, in: query, required: true, schema: { $ref: "#/components/schemas/MetricCode" } }
-        - { name: from, in: query, required: true, schema: { type: string, format: date-time } }
-        - { name: to, in: query, required: true, schema: { type: string, format: date-time } }
-        - name: interval
-          in: query
-          schema: { type: string, enum: [raw, hour], default: raw }
-          description: "`raw` is limited to a 48 h window; use `hour` for longer ranges (max 400 days)."
-      responses:
-        "200":
-          description: Ordered time series (oldest first)
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Series" }
-        "400": { $ref: "#/components/responses/BadRequest" }
-        "404": { $ref: "#/components/responses/NotFound" }
-  /snapshot:
-    get:
-      operationId: GetSnapshot
-      summary: Latest value at every station for one metric, plus island statistics
+      operationId: GetStations
+      summary: Latest value at every station for one metric, plus min/avg/max
       parameters:
         - { name: metric, in: query, required: true, schema: { $ref: "#/components/schemas/MetricCode" } }
       responses:
@@ -94,184 +24,74 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Snapshot" }
-        "400": { $ref: "#/components/responses/BadRequest" }
-  /air-quality/latest:
+        "400": { description: Unknown metric }
+  /stations/{stationId}/readings:
     get:
-      operationId: GetAirQualityLatest
-      responses:
-        "200":
-          description: Latest PSI and PM2.5 per region with NEA bands
-          content:
-            application/json:
-              schema:
-                type: array
-                items: { $ref: "#/components/schemas/AirQuality" }
-  /air-quality/history:
-    get:
-      operationId: GetAirQualityHistory
+      operationId: GetStationReadings
       parameters:
-        - { name: region, in: query, required: true, schema: { $ref: "#/components/schemas/RegionCode" } }
-        - { name: from, in: query, required: true, schema: { type: string, format: date-time } }
-        - { name: to, in: query, required: true, schema: { type: string, format: date-time } }
+        - { name: stationId, in: path, required: true, schema: { type: string, pattern: "^S[0-9]{1,4}$" } }
+        - { name: metric, in: query, required: true, schema: { $ref: "#/components/schemas/MetricCode" } }
+        - { name: hours, in: query, schema: { type: integer, minimum: 1, maximum: 168, default: 24 } }
       responses:
         "200":
-          description: Hourly history, oldest first
+          description: Readings, oldest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Point" }
+        "400": { description: Unknown metric or hours out of range }
+        "404": { description: Unknown station }
+  /air-quality:
+    get:
+      operationId: GetAirQuality
+      responses:
+        "200":
+          description: Latest 24-hour PSI and PM2.5 per region with NEA band
           content:
             application/json:
               schema:
                 type: array
                 items: { $ref: "#/components/schemas/AirQuality" }
-        "400": { $ref: "#/components/responses/BadRequest" }
 components:
-  parameters:
-    StationId:
-      name: stationId
-      in: path
-      required: true
-      schema: { type: string, pattern: "^S[0-9]{1,4}$" }
-  responses:
-    BadRequest:
-      description: Invalid parameter
-      content:
-        application/json:
-          schema: { $ref: "#/components/schemas/Error" }
-    NotFound:
-      description: Unknown resource
-      content:
-        application/json:
-          schema: { $ref: "#/components/schemas/Error" }
   schemas:
     MetricCode:
       type: string
-      enum: [air-temperature, relative-humidity, wind-speed, wind-direction, rainfall]
-    RegionCode:
-      type: string
-      enum: [north, south, east, west, central]
-    Freshness:
-      type: string
-      enum: [Fresh, Stale, NoData]
-    Error:
-      type: object
-      required: [code, message]
-      properties:
-        code: { type: string, example: INVALID_RANGE }
-        message: { type: string, example: "'from' must be before 'to'" }
-        correlationId: { type: string, description: Matches the OutSystems request log entry }
-    Metric:
-      type: object
-      required: [code, label, unit, decimals]
-      properties:
-        code: { $ref: "#/components/schemas/MetricCode" }
-        label: { type: string, example: Air temperature }
-        unit: { type: string, example: "°C" }
-        decimals: { type: integer, example: 1 }
-    LatestValue:
-      type: object
-      required: [metric, value, observedAt]
-      properties:
-        metric: { $ref: "#/components/schemas/MetricCode" }
-        value: { type: number }
-        observedAt: { type: string, format: date-time }
-    Station:
-      type: object
-      required: [id, name, latitude, longitude, region, latest]
-      properties:
-        id: { type: string, example: S109 }
-        name: { type: string, example: Ang Mo Kio Avenue 5 }
-        latitude: { type: number }
-        longitude: { type: number }
-        region: { $ref: "#/components/schemas/RegionCode" }
-        isActive: { type: boolean }
-        latest:
-          type: array
-          items: { $ref: "#/components/schemas/LatestValue" }
-    StationPage:
-      type: object
-      required: [items, page, pageSize, total]
-      properties:
-        items: { type: array, items: { $ref: "#/components/schemas/Station" } }
-        page: { type: integer }
-        pageSize: { type: integer }
-        total: { type: integer }
-    Point:
-      type: object
-      required: [t, value]
-      properties:
-        t: { type: string, format: date-time }
-        value: { type: number, description: "raw value, or hourly average when interval=hour" }
-        min: { type: number }
-        max: { type: number }
-        count: { type: integer }
-    Series:
-      type: object
-      required: [stationId, metric, unit, interval, points]
-      properties:
-        stationId: { type: string }
-        metric: { $ref: "#/components/schemas/MetricCode" }
-        unit: { type: string }
-        interval: { type: string, enum: [raw, hour] }
-        points: { type: array, items: { $ref: "#/components/schemas/Point" } }
+      enum: [air-temperature, relative-humidity, wind-speed, rainfall]
     Snapshot:
       type: object
-      required: [metric, unit, asOf, freshness, stats, stations]
+      required: [metric, unit, asOf, min, avg, max, stations]
       properties:
         metric: { $ref: "#/components/schemas/MetricCode" }
-        unit: { type: string }
-        asOf: { type: string, format: date-time }
-        freshness: { $ref: "#/components/schemas/Freshness" }
-        stats:
-          type: object
-          required: [min, max, avg, stationCount]
-          properties:
-            min: { type: number }
-            max: { type: number }
-            avg: { type: number }
-            stationCount: { type: integer }
-            minStationId: { type: string }
-            maxStationId: { type: string }
+        unit: { type: string, example: "°C" }
+        asOf: { type: string, example: "2026-10-20T16:03:00" }
+        min: { type: number }
+        avg: { type: number }
+        max: { type: number }
         stations:
           type: array
           items:
             type: object
-            required: [id, name, latitude, longitude, value, observedAt]
+            required: [id, name, value]
             properties:
-              id: { type: string }
-              name: { type: string }
+              id: { type: string, example: S109 }
+              name: { type: string, example: Ang Mo Kio Avenue 5 }
               latitude: { type: number }
               longitude: { type: number }
               value: { type: number }
-              observedAt: { type: string, format: date-time }
+    Point:
+      type: object
+      required: [observedAt, value]
+      properties:
+        observedAt: { type: string, example: "2026-10-20T16:03:00" }
+        value: { type: number }
     AirQuality:
       type: object
-      required: [region, observedAt, psi24h, psiBand, psiLevel]
+      required: [region, observedAt, psi24h, band, level]
       properties:
-        region: { $ref: "#/components/schemas/RegionCode" }
-        observedAt: { type: string, format: date-time }
+        region: { type: string, enum: [north, south, east, west, central] }
+        observedAt: { type: string, example: "2026-10-20T16:03:00" }
         psi24h: { type: integer }
-        psiBand: { type: string, enum: [Good, Moderate, Unhealthy, Very unhealthy, Hazardous] }
-        psiLevel: { type: integer, minimum: 1, maximum: 5 }
-        pm25OneHour: { type: integer, nullable: true }
-        pm25Band: { type: string, enum: [Normal, Elevated, High, Very high], nullable: true }
         pm25_24h: { type: integer }
-        pm10_24h: { type: integer }
-        o3_8hMax: { type: integer }
-        no2_1hMax: { type: integer }
-        so2_24h: { type: integer }
-        co_8hMax: { type: number }
-    EndpointHealth:
-      type: object
-      required: [endpoint, freshness, lastSuccessAt, lastRunStatus]
-      properties:
-        endpoint: { type: string, example: air-temperature }
-        freshness: { $ref: "#/components/schemas/Freshness" }
-        latestObservedAt: { type: string, format: date-time, nullable: true }
-        lastSuccessAt: { type: string, format: date-time, nullable: true }
-        lastRunStatus: { type: string, enum: [Success, Failed, Partial, NeverRun] }
-        consecutiveFailures: { type: integer }
-    Health:
-      type: object
-      required: [status, checkedAt, endpoints]
-      properties:
-        status: { type: string, enum: [Healthy, Degraded] }
-        checkedAt: { type: string, format: date-time }
-        endpoints: { type: array, items: { $ref: "#/components/schemas/EndpointHealth" } }
+        band: { type: string, enum: [Good, Moderate, Unhealthy, Very unhealthy, Hazardous] }
+        level: { type: integer, minimum: 1, maximum: 5 }

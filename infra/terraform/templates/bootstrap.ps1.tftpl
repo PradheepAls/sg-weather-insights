@@ -1,0 +1,145 @@
+<powershell>
+# OutSystems 11 first-boot setup for ${environment} (${role}). Rendered by Terraform.
+# Holds no secrets: credentials are read from Secrets Manager with the instance role.
+# Uses the Outsystems.SetupTools PowerShell module; check cmdlet parameters against the
+# pinned module version when upgrading it.
+$ErrorActionPreference = 'Stop'
+$State = 'C:\ProgramData\sgw'
+New-Item -ItemType Directory -Force -Path $State | Out-Null
+Start-Transcript -Path "$State\bootstrap.log" -Append
+if (Test-Path "$State\done") { Stop-Transcript; exit 0 }
+
+$Region = '${region}'
+$Role   = '${role}'
+$DbHost = '${db_host}'
+$Controller = if ('${controller_host}') { '${controller_host}' } else { $env:COMPUTERNAME }
+
+function Get-Secret([string] $Id) { (Get-SECSecretValue -SecretId $Id -Region $Region).SecretString }
+function New-Cred([string] $U, [string] $P) {
+    New-Object System.Management.Automation.PSCredential($U, (ConvertTo-SecureString $P -AsPlainText -Force))
+}
+
+try {
+    Set-TimeZone -Id 'Singapore Standard Time'   # same as RDS; OutSystems stores server-local time
+
+    Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force | Out-Null
+    Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+    Install-Module Outsystems.SetupTools -RequiredVersion '3.16.1.0' -Force
+    Install-Module SqlServer -Force -AllowClobber
+    Import-Module Outsystems.SetupTools, SqlServer
+
+    $s = Get-Secret '${platform_secret_arn}' | ConvertFrom-Json
+
+    # 1. Databases and logins (controller only, idempotent)
+    if ($Role -eq 'controller') {
+        $m = Get-Secret '${master_secret_arn}' | ConvertFrom-Json
+        $conn = @{ ServerInstance = $DbHost; Username = $m.username; Password = $m.password; TrustServerCertificate = $true }
+        foreach ($db in '${catalog_platform}', '${catalog_log}', '${catalog_session}') {
+            Invoke-Sqlcmd @conn -Query "IF DB_ID('$db') IS NULL CREATE DATABASE [$db]"
+        }
+        $grants = @(
+            @($s.admin_user,       $s.admin_password,       '${catalog_platform}', 'db_owner'),
+            @($s.runtime_user,     $s.runtime_password,     '${catalog_platform}', 'db_datareader,db_datawriter'),
+            @($s.log_admin_user,   $s.log_admin_password,   '${catalog_log}',      'db_owner'),
+            @($s.log_runtime_user, $s.log_runtime_password, '${catalog_log}',      'db_datareader,db_datawriter'),
+            @($s.session_user,     $s.session_password,     '${catalog_session}',  'db_owner')
+        )
+        foreach ($g in $grants) {
+            $u = $g[0]; $p = $g[1]; $db = $g[2]
+            Invoke-Sqlcmd @conn -Query "IF SUSER_ID('$u') IS NULL CREATE LOGIN [$u] WITH PASSWORD = '$p'"
+            $q = "USE [$db]; IF USER_ID('$u') IS NULL CREATE USER [$u] FOR LOGIN [$u];"
+            foreach ($r in $g[3].Split(',')) { $q += " ALTER ROLE [$r] ADD MEMBER [$u];" }
+            Invoke-Sqlcmd @conn -Query $q
+        }
+    }
+
+    # 2. Platform Server (pinned version)
+    Install-OSServerPreReqs -MajorVersion '11'
+    if ([bool]::Parse('${is_lifetime}')) { Install-OSServer -Version '${platform_server_version}' -WithLifeTime }
+    else { Install-OSServer -Version '${platform_server_version}' }
+    if ($Role -eq 'controller') {
+        Install-OSRabbitMQ -VirtualHosts @('/OutSystems') -RemoveGuestUser -AdminUser (New-Cred $s.cache_user $s.cache_password)
+    }
+    New-OSServerConfig -DatabaseProvider 'SQL'
+
+    # 3. Front-ends reuse the controller's private.key (required for a farm)
+    $keyPath = Join-Path (Get-OSServerInfo).InstallDir 'private.key'
+    if ($Role -eq 'frontend') {
+        $key = $null
+        for ($i = 0; $i -lt 120 -and -not $key; $i++) {
+            try { $key = Get-Secret '${private_key_secret_arn}' } catch { Start-Sleep -Seconds 60 }
+        }
+        if (-not $key) { throw 'Controller has not published private.key' }
+        Set-Content -Path $keyPath -Value $key -NoNewline
+    }
+
+    # 4. Configuration (passwords stored encrypted in server.hsconf)
+    $settings = @(
+        @('PlatformDatabaseConfiguration', 'Server', $DbHost, $false),
+        @('PlatformDatabaseConfiguration', 'Catalog', '${catalog_platform}', $false),
+        @('PlatformDatabaseConfiguration', 'AdminUser', $s.admin_user, $false),
+        @('PlatformDatabaseConfiguration', 'AdminPassword', $s.admin_password, $true),
+        @('PlatformDatabaseConfiguration', 'RuntimeUser', $s.runtime_user, $false),
+        @('PlatformDatabaseConfiguration', 'RuntimePassword', $s.runtime_password, $true),
+        @('LoggingDatabaseConfiguration', 'Server', $DbHost, $false),
+        @('LoggingDatabaseConfiguration', 'Catalog', '${catalog_log}', $false),
+        @('LoggingDatabaseConfiguration', 'AdminUser', $s.log_admin_user, $false),
+        @('LoggingDatabaseConfiguration', 'AdminPassword', $s.log_admin_password, $true),
+        @('LoggingDatabaseConfiguration', 'RuntimeUser', $s.log_runtime_user, $false),
+        @('LoggingDatabaseConfiguration', 'RuntimePassword', $s.log_runtime_password, $true),
+        @('SessionDatabaseConfiguration', 'Server', $DbHost, $false),
+        @('SessionDatabaseConfiguration', 'Catalog', '${catalog_session}', $false),
+        @('SessionDatabaseConfiguration', 'SessionUser', $s.session_user, $false),
+        @('SessionDatabaseConfiguration', 'SessionPassword', $s.session_password, $true),
+        @('ServiceConfiguration', 'CompilerServerHostname', $Controller, $false),
+        @('CacheInvalidationConfiguration', 'ServiceHost', $Controller, $false),
+        @('CacheInvalidationConfiguration', 'ServiceUsername', $s.cache_user, $false),
+        @('CacheInvalidationConfiguration', 'ServicePassword', $s.cache_password, $true),
+        @('CacheInvalidationConfiguration', 'VirtualHost', '/OutSystems', $false)
+    )
+    foreach ($c in $settings) {
+        if ($c[3]) { Set-OSServerConfig -SettingSection $c[0] -Setting $c[1] -Value $c[2] -Encrypted }
+        else { Set-OSServerConfig -SettingSection $c[0] -Setting $c[1] -Value $c[2] }
+    }
+    $apply = @{
+        Apply                = $true
+        PlatformDBCredential = New-Cred $s.admin_user $s.admin_password
+        SessionDBCredential  = New-Cred $s.session_user $s.session_password
+        LogDBCredential      = New-Cred $s.log_admin_user $s.log_admin_password
+    }
+    if ($Role -eq 'controller') { $apply.ConfigureCacheInvalidationService = $true; $apply.InstallServiceCenter = $true }
+    else { $apply.SkipSessionRebuild = $true }
+    Set-OSServerConfig @apply
+
+    # 5. Controller-only: share the key, system components, licence (and LifeTime)
+    if ($Role -eq 'controller') {
+        $existing = $null
+        try { $existing = Get-Secret '${private_key_secret_arn}' } catch {}
+        if (-not $existing) {
+            Write-SECSecretValue -SecretId '${private_key_secret_arn}' -SecretString (Get-Content $keyPath -Raw) -Region $Region | Out-Null
+        }
+        Install-OSPlatformSystemComponents
+        Read-S3Object -BucketName '${license_bucket}' -Key '${license_key}' -File "$State\license.lic" -Region $Region | Out-Null
+        Install-OSPlatformLicense -Path "$State\license.lic"
+        Remove-Item "$State\license.lic" -Force
+        if ([bool]::Parse('${is_lifetime}')) { Install-OSPlatformLifetime }
+    }
+    Set-OSServerPerformanceTunning
+
+    # 6. HTTPS binding for the ALB (TLS inside the VPC) and the load-balancer health page
+    Import-Module WebAdministration
+    $cert = New-SelfSignedCertificate -DnsName $env:COMPUTERNAME -CertStoreLocation Cert:\LocalMachine\My -NotAfter (Get-Date).AddYears(3)
+    if (-not (Get-WebBinding -Name 'Default Web Site' -Protocol https)) { New-WebBinding -Name 'Default Web Site' -Protocol https -Port 443 }
+    (Get-WebBinding -Name 'Default Web Site' -Protocol https).AddSslCertificate($cert.Thumbprint, 'My')
+    Set-Content -Path 'C:\inetpub\wwwroot\lb-health.html' -Value 'OK'
+
+    New-Item -ItemType File -Path "$State\done" | Out-Null
+    Write-Output 'Bootstrap completed.'
+}
+catch {
+    Write-Output "BOOTSTRAP FAILED: $($_.Exception.Message)"
+    throw
+}
+finally { Stop-Transcript }
+</powershell>
+<persist>false</persist>

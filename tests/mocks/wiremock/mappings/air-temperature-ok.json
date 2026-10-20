@@ -1,5 +1,0 @@
-{
-  "priority": 10,
-  "request": { "method": "GET", "urlPath": "/v2/real-time/api/air-temperature" },
-  "response": { "status": 200, "headers": { "Content-Type": "application/json" }, "bodyFileName": "air_temperature_latest.json" }
-}

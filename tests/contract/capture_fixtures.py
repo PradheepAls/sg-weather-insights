@@ -7,11 +7,10 @@ import requests
 
 BASE = "https://api-open.data.gov.sg/v2/real-time/api"
 OUT = Path(__file__).parent / "fixtures"
-KEEP = {"S109", "S24", "S44", "S60", "S199"}
+KEEP = {"S109", "S24", "S44", "S60"}
 
 for endpoint, name in [("air-temperature", "air_temperature_latest"),
                        ("relative-humidity", "relative_humidity_latest"),
-                       ("wind-speed", "wind_speed_latest"),
                        ("psi", "psi_latest")]:
     body = requests.get(f"{BASE}/{endpoint}", timeout=20).json()
     data = body.get("data") or {}

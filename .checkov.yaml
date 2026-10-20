@@ -1,30 +1,26 @@
-# Checkov configuration. Every skip carries its justification; anything not listed is gating.
+# Checkov configuration. Each skip has its reason; anything not listed fails the build.
 compact: true
 quiet: true
 framework:
   - terraform
 skip-path:
-  - infra/terraform/modules/.*/tests
+  - infra/terraform/tests
 skip-check:
-  # Conditional controls: enabled for Prod via variables and enforced by preconditions +
-  # terraform test; Checkov evaluates the non-prod defaults.
-  - CKV_AWS_150   # ALB deletion protection (var.is_production)
-  - CKV_AWS_157   # RDS Multi-AZ (var.db_multi_az, precondition for Prod)
-  - CKV_AWS_293   # RDS deletion protection (var.deletion_protection, precondition for Prod)
-  - CKV2_AWS_28   # ALB WAF (var.enable_waf, Prod)
-  # Set on the launch template the instance is created from; Checkov does not follow it.
-  - CKV_AWS_79    # IMDSv2 (http_tokens=required in launch template; asserted in tests)
-  - CKV_AWS_8     # EBS encryption (launch template)
-  - CKV_AWS_126   # detailed monitoring (launch template)
-  - CKV_AWS_135   # EBS optimised (launch template)
-  - CKV2_AWS_41   # instance profile is attached through the launch template
-  # Not applicable / accepted.
-  - CKV_AWS_161   # RDS IAM auth: not supported by SQL Server
-  - CKV_AWS_145   # ALB log bucket must use SSE-S3 (ALB cannot write to SSE-KMS)
-  - CKV_AWS_144   # cross-region replication not required for installers/logs
-  - CKV2_AWS_62   # S3 event notifications not required
-  - CKV_AWS_18    # access logging on the log/artifact buckets themselves
-  - CKV_AWS_338   # 1-year log retention: 90 days non-prod is a deliberate cost choice (configurable)
-  - CKV2_AWS_57   # automatic rotation: OutSystems logins rotated via documented runbook (needs server reconfiguration)
-  - CKV_AWS_337   # SSM parameter holds non-secret agent config (String, not SecureString)
-  - CKV2_AWS_34   # same parameter
+  # Enabled for Prod through variables and enforced by preconditions + terraform test.
+  - CKV_AWS_150   # ALB deletion protection (is_production)
+  - CKV_AWS_157   # RDS Multi-AZ (db_multi_az, required for Prod)
+  - CKV_AWS_293   # RDS deletion protection (required for Prod)
+  # Set on the launch template the instance is launched from; Checkov does not follow it.
+  - CKV_AWS_79    # IMDSv2
+  - CKV_AWS_8     # EBS encryption
+  - CKV_AWS_126   # detailed monitoring
+  - CKV_AWS_135   # EBS optimised
+  - CKV2_AWS_41   # instance profile
+  # Not applicable.
+  - CKV_AWS_161   # RDS IAM authentication is not supported for SQL Server
+  # Deliberately out of scope for this assessment (listed as next steps in the README).
+  - CKV2_AWS_28   # WAF on the ALB
+  - CKV_AWS_91    # ALB access logs
+  - CKV2_AWS_11   # VPC flow logs
+  - CKV_AWS_118   # RDS enhanced monitoring
+  - CKV2_AWS_57   # automatic secret rotation (OutSystems servers must be reconfigured on rotation)

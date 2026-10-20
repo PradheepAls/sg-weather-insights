@@ -9,26 +9,19 @@ def test_every_operation_has_an_operation_id_and_200():
             assert "200" in op["responses"], f"{method.upper()} {path}"
 
 
-def test_error_responses_use_the_shared_envelope():
-    for name in ("BadRequest", "NotFound"):
-        schema = spec()["components"]["responses"][name]["content"]["application/json"]["schema"]
-        assert schema == {"$ref": "#/components/schemas/Error"}
-
-
 def test_sample_payloads_conform():
     assert_conforms(
-        {"region": "west", "observedAt": "2026-10-19T20:00:00+08:00", "psi24h": 114,
-         "psiBand": "Unhealthy", "psiLevel": 3, "pm25OneHour": None, "pm25Band": None},
-        "AirQuality",
+        {"metric": "air-temperature", "unit": "°C", "asOf": "2026-10-20T16:03:00", "min": 27.3, "avg": 28.7,
+         "max": 30.0, "stations": [{"id": "S109", "name": "Ang Mo Kio Avenue 5", "value": 27.3}]},
+        "Snapshot",
     )
     assert_conforms(
-        {"status": "Degraded", "checkedAt": "2026-10-20T16:30:00+08:00",
-         "endpoints": [{"endpoint": "pm25", "freshness": "NoData", "lastSuccessAt": None,
-                        "lastRunStatus": "NeverRun", "latestObservedAt": None}]},
-        "Health",
+        {"region": "west", "observedAt": "2026-10-19T20:00:00", "psi24h": 114, "pm25_24h": 68,
+         "band": "Unhealthy", "level": 3},
+        "AirQuality",
     )
 
 
 def test_band_enum_matches_vectors(vectors):
     bands = {c["band"] for c in vectors("psi_band.json")["cases"]} - {"Invalid"}
-    assert set(spec()["components"]["schemas"]["AirQuality"]["properties"]["psiBand"]["enum"]) == bands
+    assert set(spec()["components"]["schemas"]["AirQuality"]["properties"]["band"]["enum"]) == bands

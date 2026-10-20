@@ -1,4 +1,0 @@
-{
-  "request": { "method": "GET", "urlPath": "/v2/real-time/api/psi", "headers": { "X-Test-Scenario": { "equalTo": "psi-down" } } },
-  "response": { "status": 503, "body": "Service Unavailable" }
-}
