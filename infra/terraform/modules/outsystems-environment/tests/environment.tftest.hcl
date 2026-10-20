@@ -44,6 +44,13 @@ mock_provider "aws" {
   mock_resource "aws_ssm_parameter" {
     defaults = { arn = "arn:aws:ssm:ap-southeast-1:111122223333:parameter/mock" }
   }
+  mock_resource "aws_launch_template" {
+    defaults = {
+      id             = "lt-0123456789abcdef0"
+      arn            = "arn:aws:ec2:ap-southeast-1:111122223333:launch-template/lt-0123456789abcdef0"
+      latest_version = 1
+    }
+  }
   mock_resource "aws_instance" {
     defaults = {
       id         = "i-0123456789abcdef0"
