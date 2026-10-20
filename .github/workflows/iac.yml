@@ -31,7 +31,7 @@ jobs:
         run: terraform fmt -check -recursive infra/terraform
       - name: validate + test modules
         run: |
-          set -uo pipefail
+          set +e -u -o pipefail
           # Failures are re-emitted as a single annotation so they are readable from the
           # checks API / PR UI without opening the raw log.
           fail() {
