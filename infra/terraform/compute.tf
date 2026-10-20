@@ -14,8 +14,6 @@ locals {
     catalog_log             = local.catalogs.log
     catalog_session         = local.catalogs.session
   }
-
-  instance_tags = { Name = local.name }
 }
 
 # Windows Server 2022, resolved from AWS's public SSM parameter at launch: new instances
